@@ -655,6 +655,19 @@ void print_passet(pdns_record *l, pdns_asset *p, ldns_rr *rr,
     int offset = 0;
     uint8_t is_err_record = 0;
 
+     if (config.output_plugin != NULL) {
+         config.output_plugin->output(l, p, rr, lname, rcode);
+         if (p == NULL) {
+             l->last_print = l->last_seen;
+             l->seen = 0;
+         }
+         else {
+             p->last_print = p->last_seen;
+             p->seen = 0;
+         }
+         return;
+     }
+
 #ifdef HAVE_JSON
     json_t *jdata;
     json_t *json_timestamp_s;
@@ -1430,79 +1443,87 @@ void update_dns_stats(packetinfo *pi, uint8_t code)
     }
 }
 
-void parse_field_flags(char *args)
+uint8_t parse_field_flags(char *args)
 {
     int i;
     int ok  = 0;
     int len = 0;
-    uint8_t tmpf;
-
-    tmpf = config.fieldsf;
+    uint8_t tmpf = 0;
+    uint8_t default_field = 0;
+    /* config.fieldsf |= FIELD_TIMESTAMP_YMDHMS; /* not on by default  */
+    default_field |= FIELD_TIMESTAMP_S;
+    default_field |= FIELD_TIMESTAMP_MS;
+    default_field |= FIELD_CLIENT;
+    default_field |= FIELD_SERVER;
+    default_field |= FIELD_CLASS;
+    default_field |= FIELD_QUERY;
+    default_field |= FIELD_TYPE;
+    default_field |= FIELD_ANSWER;
+    default_field |= FIELD_TTL;
+    default_field |= FIELD_COUNT;
     len = strlen(args);
 
     if (len == 0) {
         plog("[W] No fields are specified!\n");
         plog("[*] Continuing with default fields...\n");
-        return;
+        return default_field;
     }
-
-    config.fieldsf = 0;
 
     for (i = 0; i < len; i++)
     {
         switch(args[i]) {
             case 'H': /* Timestamp(YMDHMS) */
-                config.fieldsf |= FIELD_TIMESTAMP_YMDHMS;
+                tmpf |= FIELD_TIMESTAMP_YMDHMS;
                 dlog("[D] Enabling field: FIELD_TIMESTAMP_YMDHMS\n");
                 ok++;
                 break;
             case 'S': /* Timestamp(s) */
-                config.fieldsf |= FIELD_TIMESTAMP_S;
+                tmpf |= FIELD_TIMESTAMP_S;
                 dlog("[D] Enabling field: FIELD_TIMESTAMP_S\n");
                 ok++;
                 break;
             case 'M': /* Timestamp(ms) */
-                config.fieldsf |= FIELD_TIMESTAMP_MS;
+                tmpf |= FIELD_TIMESTAMP_MS;
                 dlog("[D] Enabling field: FIELD_TIMESTAMP_MS\n");
                 ok++;
                 break;
             case 'c': /* Client */
-                config.fieldsf |= FIELD_CLIENT;
+                tmpf |= FIELD_CLIENT;
                 dlog("[D] Enabling field: FIELD_CLIENT\n");
                 ok++;
                 break;
             case 's': /* Server */
-                config.fieldsf |= FIELD_SERVER;
+                tmpf |= FIELD_SERVER;
                 dlog("[D] Enabling field: FIELD_SERVER\n");
                 ok++;
                 break;
             case 'C': /* Class */
-                config.fieldsf |= FIELD_CLASS;
+                tmpf |= FIELD_CLASS;
                 dlog("[D] Enabling field: FIELD_CLASS\n");
                 ok++;
                 break;
             case 'Q': /* Query */
-                config.fieldsf |= FIELD_QUERY;
+                tmpf |= FIELD_QUERY;
                 dlog("[D] Enabling field: FIELD_QUERY\n");
                 ok++;
                 break;
             case 'T': /* Type */
-                config.fieldsf |= FIELD_TYPE;
+                tmpf |= FIELD_TYPE;
                 dlog("[D] Enabling field: FIELD_TYPE\n");
                 ok++;
                 break;
             case 'A': /* Answer */
-                config.fieldsf |= FIELD_ANSWER;
+                tmpf |= FIELD_ANSWER;
                 dlog("[D] Enabling field: FIELD_ANSWER\n");
                 ok++;
                 break;
             case 't': /* TTL */
-                config.fieldsf |= FIELD_TTL;
+                tmpf |= FIELD_TTL;
                 dlog("[D] Enabling field: FIELD_TTL\n");
                 ok++;
                 break;
             case 'n': /* Count */
-                config.fieldsf |= FIELD_COUNT;
+                tmpf |= FIELD_COUNT;
                 dlog("[D] Enabling field: FIELD_COUNT\n");
                 ok++;
                 break;
@@ -1514,8 +1535,9 @@ void parse_field_flags(char *args)
 
     if (ok == 0) {
         plog("[W] No valid fields parsed, continuing with defaults.\n");
-        config.fieldsf = tmpf;
+        return default_field;
     }
+    return tmpf;
 }
 
 void parse_dns_flags(char *args)

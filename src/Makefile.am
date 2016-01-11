@@ -10,7 +10,7 @@ all: $(bin_PROGRAMS)
 	$(CC) -O3 $(CPPFLAGS) -c $< -o $@
 
 passivedns$(EXEEXT): $(OBJECTS)
-	$(CC) -o passivedns $(OBJECTS) $(LDFLAGS)
+	$(CC) -o passivedns $(OBJECTS) $(LDFLAGS) -rdynamic
 
 clean:
 	-rm -v passivedns *.o 2>/dev/null || true

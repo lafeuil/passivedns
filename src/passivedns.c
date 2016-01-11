@@ -42,6 +42,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <ctype.h>
+#include <dlfcn.h>
 #include "passivedns.h"
 #include "dns.h"
 
@@ -1020,6 +1021,12 @@ void game_over()
         }
 #endif /* HAVE_PFRING */
         end_all_sessions();
+        if (config.output_plugin != NULL) {
+            if (config.output_plugin->stop != NULL) {
+                (config.output_plugin->stop)();
+            }
+        }
+
         if (config.logfile_fd != NULL && config.logfile_fd != stdout)
             fclose(config.logfile_fd);
         if (config.logfile_nxd_fd != NULL && config.logfile_nxd_fd != stdout)
@@ -1078,6 +1085,7 @@ void usage()
 #endif /* HAVE_JSON */
     olog(" -f <fields>     Choose which fields to print (default: -f SMcsCQTAtn).\n");
     olog(" -b 'BPF'        Berkley Packet Filter (default: 'port 53').\n");
+    olog(" -O plugin.so    Output plugin.\n");
     olog(" -p <file>       Name of pid file (default: /var/run/passivedns.pid).\n");
     olog(" -S <mem>        Soft memory limit in MB (default: 256).\n");
     olog(" -C <sec>        Seconds to cache DNS objects in memory (default: %u).\n", DNSCACHETIMEOUT);
@@ -1111,6 +1119,12 @@ void usage()
     olog("   f:FORMERR   s:SERVFAIL  x:NXDOMAIN  o:NOTIMPL  r:REFUSED\n");
     olog("   y:YXDOMAIN  e:YXRRSET   t:NXRRSET   a:NOTAUTH  z:NOTZONE\n");
     olog("\n");
+
+    if (config.output_plugin != NULL && config.output_plugin->usage != NULL) {
+        olog(" * Plugin usage:\n");
+        (config.output_plugin->usage)();
+        olog("\n");
+    }
 }
 
 void show_version()
@@ -1147,6 +1161,9 @@ int main(int argc, char *argv[])
 {
     int ch = 0; // verbose_already = 0;
     int daemon = 0;
+    char *t;
+    char sn[256];
+    struct _output_plugin *p;
     memset(&config, 0, sizeof(globalconfig));
     config.inpacket = config.intr_flag = 0;
     config.dnslastchk = 0;
@@ -1164,18 +1181,7 @@ int main(int argc, char *argv[])
     config.dnscachetimeout =  DNSCACHETIMEOUT;
     config.dnsf = 0;
     config.log_delimiter = "||";
-    config.fieldsf = 0;
-    /* config.fieldsf |= FIELD_TIMESTAMP_YMDHMS; /* not on by default  */
-    config.fieldsf |= FIELD_TIMESTAMP_S;
-    config.fieldsf |= FIELD_TIMESTAMP_MS;
-    config.fieldsf |= FIELD_CLIENT;
-    config.fieldsf |= FIELD_SERVER;
-    config.fieldsf |= FIELD_CLASS;
-    config.fieldsf |= FIELD_QUERY;
-    config.fieldsf |= FIELD_TYPE;
-    config.fieldsf |= FIELD_ANSWER;
-    config.fieldsf |= FIELD_TTL;
-    config.fieldsf |= FIELD_COUNT;
+    config.fieldsf = parse_field_flags("");
     config.dnsf |= DNS_CHK_A;
     config.dnsf |= DNS_CHK_AAAA;
     config.dnsf |= DNS_CHK_PTR;
@@ -1196,7 +1202,7 @@ int main(int argc, char *argv[])
     signal(SIGUSR1, print_pdns_stats);
     signal(SIGUSR2, expire_all_dns_records);
 
-#define ARGS "i:r:c:nyYjJl:L:d:hb:Dp:C:P:S:f:X:u:g:T:V"
+#define ARGS "i:r:c:nyYjJl:L:d:hb:Dp:C:P:S:f:X:u:g:T:V:O:"
 
     while ((ch = getopt(argc, argv, ARGS)) != -1)
         switch (ch) {
@@ -1231,6 +1237,37 @@ int main(int argc, char *argv[])
         case 'd':
             config.log_delimiter = optarg;
             break;
+        case 'O':
+            p = calloc(1, sizeof(*p));
+            t = strrchr(optarg, '/');
+            p->name = strdup(t ? t+1 : optarg);
+            if ((t = strstr(p->name, ".so")))
+                *t = 0;
+            p->handle = dlopen(optarg, RTLD_NOW);
+            if (!p->handle) {
+                elog("%s: %s", optarg, dlerror());
+                exit(1);
+            }
+            snprintf(sn, sizeof(sn), "%s_start", p->name);
+            p->start = dlsym(p->handle, sn);
+            snprintf(sn, sizeof(sn), "%s_stop", p->name);
+            p->stop = dlsym(p->handle, sn);
+            snprintf(sn, sizeof(sn), "%s_output", p->name);
+            p->output = dlsym(p->handle, sn);
+            if (!p->output) {
+                elog("%s", dlerror());
+                exit(1);
+            }
+            snprintf(sn, sizeof(sn), "%s_usage", p->name);
+            p->usage = dlsym(p->handle, sn);
+            snprintf(sn, sizeof(sn), "%s_getopt", p->name);
+            p->getopt = dlsym(p->handle, sn);
+            if (p->getopt) {
+                (*p->getopt)(&argc, &argv);
+            }
+            elog("Plugin '%s' loaded\n", p->name);
+            config.output_plugin = p;
+            break;
         case 'b':
             config.bpff = optarg;
             break;
@@ -1247,7 +1284,7 @@ int main(int argc, char *argv[])
             config.mem_limit_max = (strtol(optarg, NULL, 0) * 1024 * 1024);
             break;
         case 'f':
-            parse_field_flags(optarg);
+            config.fieldsf = parse_field_flags(optarg);
             break;
         case 'X':
             parse_dns_flags(optarg);
@@ -1488,6 +1525,13 @@ int main(int argc, char *argv[])
     }
 
     alarm(TIMEOUT);
+
+    if (config.output_plugin != NULL) {
+        if (0 != (*config.output_plugin->start)()) {
+            elog("%s_start returned non-zero", p->name);
+            exit(1);
+        }
+    }
 
     if (!config.pcap_file) olog("[*] Sniffing...\n\n");
 

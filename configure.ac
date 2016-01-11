@@ -196,6 +196,10 @@ AS_IF([test "x$enable_json" = "xyes"], [
     fi
 ])
 
+AC_CHECK_LIB([dl], [dlopen], [
+  LDFLAGS="${LDFLAGS} -ldl"
+])
+
 # Checks for header files.
 AC_CHECK_HEADERS([arpa/inet.h fcntl.h netinet/in.h stdlib.h string.h syslog.h unistd.h])
 
